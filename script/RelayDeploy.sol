@@ -10,6 +10,7 @@ import {CreateXWrapper} from "@symbioticfi/core/script/utils/CreateXWrapper.sol"
 import {Logs} from "@symbioticfi/core/script/utils/Logs.sol";
 import {SymbioticCoreConstants} from "@symbioticfi/core/test/integration/SymbioticCoreConstants.sol";
 import {SymbioticCoreInit} from "@symbioticfi/core/script/integration/SymbioticCoreInit.sol";
+import {Token} from "@symbioticfi/core/test/mocks/Token.sol";
 import "@symbioticfi/core/test/integration/SymbioticCoreImports.sol";
 
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
@@ -17,6 +18,19 @@ import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transpa
 import {IOpNetVaultAutoDeploy} from "../src/interfaces/modules/voting-power/extensions/IOpNetVaultAutoDeploy.sol";
 import {VotingPowerProvider} from "../src/modules/voting-power/VotingPowerProvider.sol";
 import {IValSetDriver} from "../src/interfaces/modules/valset-driver/IValSetDriver.sol";
+import {ISettlement} from "../src/interfaces/modules/settlement/ISettlement.sol";
+
+// Relay imports
+import {MyKeyRegistry} from "../examples/MyKeyRegistry.sol";
+import {MyVotingPowerProvider} from "../examples/MyVotingPowerProvider.sol";
+import {IKeyRegistry} from "../src/interfaces/modules/key-registry/IKeyRegistry.sol";
+import {IVotingPowerProvider} from "../src/interfaces/modules/voting-power/IVotingPowerProvider.sol";
+import {KeyBlsBn254, BN254} from "../src/libraries/keys/KeyBlsBn254.sol";
+import {KeyBlsBls12381} from "../src/libraries/keys/KeyBlsBls12381.sol";
+import {BLS12381} from "../src/libraries/utils/BLS12381.sol";
+import {KeyTags} from "../src/libraries/utils/KeyTags.sol";
+import {BN254G2} from "../test/helpers/BN254G2.sol";
+import {KEY_TYPE_BLS_BN254, KEY_TYPE_BLS_BLS12381} from "../src/interfaces/modules/key-registry/IKeyRegistry.sol";
 
 /**
  * @title RelayDeploy
@@ -29,10 +43,34 @@ import {IValSetDriver} from "../src/interfaces/modules/valset-driver/IValSetDriv
  * This script requires a deployed CreateX instance.
  */
 abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
+    using KeyTags for uint8;
+    using KeyBlsBn254 for BN254.G1Point;
+    using BN254 for BN254.G1Point;
+    using KeyBlsBn254 for KeyBlsBn254.KEY_BLS_BN254;
+    using KeyBlsBls12381 for KeyBlsBls12381.KEY_BLS_BLS12381;
+    using SymbioticSubnetwork for address;
+
+    uint256 public constant NUM_OPERATORS = 16;
+    uint256 public constant NUM_VAULTS = 1;
+    uint256 public constant NUM_STAKERS = 1;
+    uint96 public constant SUBNETWORK_ID = 0;
+    uint256 public constant STAKER_PRIVATE_KEY_OFFSET = 2e18;
+    uint8 public constant REQUIRED_HEADER_KEY_TAG = 15;
+    uint248 public constant QUORUM_THRESHOLD = 6667;
+
+    bytes32 internal constant KEY_OWNERSHIP_TYPEHASH = keccak256("KeyOwnership(address operator,bytes key)");
+    address internal constant BLS12_G2MSM = 0x000000000000000000000000000000000000000E;
+
     string public CONFIG_FILE;
+
+    Vm.Wallet public deployer;
+    address public network;
 
     constructor(string memory configFile) {
         CONFIG_FILE = configFile;
+        deployer = vm.createWallet(vm.envUint("PRIVATE_KEY"));
+        network = deployer.addr;
+        // network = 0x895aDC2EfB58534dECeE4B2d5603855CF201Dd83; // Use same for simplicity
     }
 
     modifier loadConfig() {
@@ -41,7 +79,7 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
     }
 
     modifier withBroadcast() {
-        (Vm.CallerMode callerMode,, address deployer) = vm.readCallers();
+        (Vm.CallerMode callerMode, , address deployer) = vm.readCallers();
         _stopBroadcastWhenCallerModeIsSingle(callerMode);
         _startBroadcastWhenCallerModeIsNotRecurrent(callerMode, deployer);
         _;
@@ -49,7 +87,7 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
     }
 
     modifier withoutBroadcast() {
-        (Vm.CallerMode callerMode,, address deployer) = vm.readCallers();
+        (Vm.CallerMode callerMode, , address deployer) = vm.readCallers();
         _stopBroadcastWhenCallerModeIsSingleOrRecurrent(callerMode);
         _;
         _startBroadcastWhenCallerModeIsRecurrent(callerMode, deployer);
@@ -95,6 +133,8 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
 
     function runDeployValSetDriver() public virtual;
 
+    function runPopulateDeployment() public virtual;
+
     function getCore() public withoutBroadcast loadConfig returns (SymbioticCoreConstants.Core memory) {
         if (!SymbioticCoreConstants.coreSupported()) {
             if (config.get("vault_factory").data.length == 0) {
@@ -111,25 +151,30 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
                 config.set("operator_network_opt_in_service", address(core.operatorNetworkOptInService));
                 config.set("vault_configurator", address(core.vaultConfigurator));
             }
-            return SymbioticCoreConstants.Core({
-                vaultFactory: ISymbioticVaultFactory(config.get("vault_factory").toAddress()),
-                delegatorFactory: ISymbioticDelegatorFactory(config.get("delegator_factory").toAddress()),
-                slasherFactory: ISymbioticSlasherFactory(config.get("slasher_factory").toAddress()),
-                networkRegistry: ISymbioticNetworkRegistry(config.get("network_registry").toAddress()),
-                networkMetadataService: ISymbioticMetadataService(config.get("network_metadata_service").toAddress()),
-                networkMiddlewareService: ISymbioticNetworkMiddlewareService(
-                    config.get("network_middleware_service").toAddress()
-                ),
-                operatorRegistry: ISymbioticOperatorRegistry(config.get("operator_registry").toAddress()),
-                operatorMetadataService: ISymbioticMetadataService(config.get("operator_metadata_service").toAddress()),
-                operatorVaultOptInService: ISymbioticOptInService(
-                    config.get("operator_vault_opt_in_service").toAddress()
-                ),
-                operatorNetworkOptInService: ISymbioticOptInService(
-                    config.get("operator_network_opt_in_service").toAddress()
-                ),
-                vaultConfigurator: ISymbioticVaultConfigurator(config.get("vault_configurator").toAddress())
-            });
+            return
+                SymbioticCoreConstants.Core({
+                    vaultFactory: ISymbioticVaultFactory(config.get("vault_factory").toAddress()),
+                    delegatorFactory: ISymbioticDelegatorFactory(config.get("delegator_factory").toAddress()),
+                    slasherFactory: ISymbioticSlasherFactory(config.get("slasher_factory").toAddress()),
+                    networkRegistry: ISymbioticNetworkRegistry(config.get("network_registry").toAddress()),
+                    networkMetadataService: ISymbioticMetadataService(
+                        config.get("network_metadata_service").toAddress()
+                    ),
+                    networkMiddlewareService: ISymbioticNetworkMiddlewareService(
+                        config.get("network_middleware_service").toAddress()
+                    ),
+                    operatorRegistry: ISymbioticOperatorRegistry(config.get("operator_registry").toAddress()),
+                    operatorMetadataService: ISymbioticMetadataService(
+                        config.get("operator_metadata_service").toAddress()
+                    ),
+                    operatorVaultOptInService: ISymbioticOptInService(
+                        config.get("operator_vault_opt_in_service").toAddress()
+                    ),
+                    operatorNetworkOptInService: ISymbioticOptInService(
+                        config.get("operator_network_opt_in_service").toAddress()
+                    ),
+                    vaultConfigurator: ISymbioticVaultConfigurator(config.get("vault_configurator").toAddress())
+                });
         }
         return SymbioticCoreConstants.core();
     }
@@ -146,7 +191,10 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
             Variable memory keyRegistry = config.get(configChainIds[i], "key_registry");
             if (keyRegistry.data.length > 0) {
                 return
-                    IValSetDriver.CrossChainAddress({chainId: uint64(configChainIds[i]), addr: keyRegistry.toAddress()});
+                    IValSetDriver.CrossChainAddress({
+                        chainId: uint64(configChainIds[i]),
+                        addr: keyRegistry.toAddress()
+                    });
             }
         }
     }
@@ -169,7 +217,8 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
             Variable memory votingPowerProvider = config.get(configChainIds[i], "voting_power_provider");
             if (votingPowerProvider.data.length > 0) {
                 votingPowerProviders[length] = IValSetDriver.CrossChainAddress({
-                    chainId: uint64(configChainIds[i]), addr: votingPowerProvider.toAddress()
+                    chainId: uint64(configChainIds[i]),
+                    addr: votingPowerProvider.toAddress()
                 });
                 ++length;
             }
@@ -196,8 +245,10 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
         for (uint256 i; i < configChainIds.length; ++i) {
             Variable memory settlement = config.get(configChainIds[i], "settlement");
             if (settlement.data.length > 0) {
-                settlements[length] =
-                    IValSetDriver.CrossChainAddress({chainId: uint64(configChainIds[i]), addr: settlement.toAddress()});
+                settlements[length] = IValSetDriver.CrossChainAddress({
+                    chainId: uint64(configChainIds[i]),
+                    addr: settlement.toAddress()
+                });
                 ++length;
             }
         }
@@ -219,7 +270,8 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
             if (valSetDriver.data.length > 0) {
                 return
                     IValSetDriver.CrossChainAddress({
-                        chainId: uint64(configChainIds[i]), addr: valSetDriver.toAddress()
+                        chainId: uint64(configChainIds[i]),
+                        addr: valSetDriver.toAddress()
                     });
             }
         }
@@ -232,13 +284,11 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
      * @param isDeployerGuarded Whether to deploy with guarded salt for enhanced security
      * @return The address of the deployed KeyRegistry contract
      */
-    function deployKeyRegistry(address proxyOwner, bool isDeployerGuarded, bytes11 salt)
-        public
-        virtual
-        withoutBroadcast
-        loadConfig
-        returns (address)
-    {
+    function deployKeyRegistry(
+        address proxyOwner,
+        bool isDeployerGuarded,
+        bytes11 salt
+    ) public virtual withoutBroadcast loadConfig returns (address) {
         (address implementation, bytes memory initData) = _keyRegistryParams();
         address newContract = _deployContract(salt, implementation, initData, proxyOwner, isDeployerGuarded);
         Logs.log(string.concat("KeyRegistry deployed at: ", vm.toString(newContract)));
@@ -253,13 +303,11 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
      * @param isDeployerGuarded Whether to deploy with guarded salt for enhanced security
      * @return The address of the deployed VotingPowerProvider contract
      */
-    function deployVotingPowerProvider(address proxyOwner, bool isDeployerGuarded, bytes11 salt)
-        public
-        virtual
-        withoutBroadcast
-        loadConfig
-        returns (address)
-    {
+    function deployVotingPowerProvider(
+        address proxyOwner,
+        bool isDeployerGuarded,
+        bytes11 salt
+    ) public virtual withoutBroadcast loadConfig returns (address) {
         (address implementation, bytes memory initData) = _votingPowerProviderParams();
         address newContract = _deployContract(salt, implementation, initData, proxyOwner, isDeployerGuarded);
 
@@ -274,8 +322,9 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
                 VotingPowerProvider(newContract).VAULT_FACTORY() == address(core.vaultFactory),
                 "VotingPowerProvider.VAULT_FACTORY() has incorrect value"
             );
-            (bool success, bytes memory data) =
-                newContract.call(abi.encodeWithSelector(IOpNetVaultAutoDeploy.VAULT_CONFIGURATOR.selector));
+            (bool success, bytes memory data) = newContract.call(
+                abi.encodeWithSelector(IOpNetVaultAutoDeploy.VAULT_CONFIGURATOR.selector)
+            );
             if (success) {
                 require(
                     abi.decode(data, (address)) == address(core.vaultConfigurator),
@@ -295,13 +344,11 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
      * @param isDeployerGuarded Whether to deploy with guarded salt for enhanced security
      * @return The address of the deployed Settlement contract
      */
-    function deploySettlement(address proxyOwner, bool isDeployerGuarded, bytes11 salt)
-        public
-        virtual
-        withoutBroadcast
-        loadConfig
-        returns (address)
-    {
+    function deploySettlement(
+        address proxyOwner,
+        bool isDeployerGuarded,
+        bytes11 salt
+    ) public virtual withoutBroadcast loadConfig returns (address) {
         (address implementation, bytes memory initData) = _settlementParams();
         address newContract = _deployContract(salt, implementation, initData, proxyOwner, isDeployerGuarded);
         Logs.log(string.concat("Settlement deployed at: ", vm.toString(newContract)));
@@ -316,13 +363,11 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
      * @param isDeployerGuarded Whether to deploy with guarded salt for enhanced security
      * @return The address of the deployed ValSetDriver contract
      */
-    function deployValSetDriver(address proxyOwner, bool isDeployerGuarded, bytes11 salt)
-        public
-        virtual
-        withoutBroadcast
-        loadConfig
-        returns (address)
-    {
+    function deployValSetDriver(
+        address proxyOwner,
+        bool isDeployerGuarded,
+        bytes11 salt
+    ) public virtual withoutBroadcast loadConfig returns (address) {
         (address implementation, bytes memory initData) = _valSetDriverParams();
         address newContract = _deployContract(salt, implementation, initData, proxyOwner, isDeployerGuarded);
         Logs.log(string.concat("ValSetDriver deployed at: ", vm.toString(newContract)));
@@ -348,13 +393,391 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
         bool isDeployerGuarded
     ) internal virtual withBroadcast returns (address) {
         bytes memory proxyInitCode = abi.encodePacked(
-            type(TransparentUpgradeableProxy).creationCode, abi.encode(implementation, owner, new bytes(0))
+            type(TransparentUpgradeableProxy).creationCode,
+            abi.encode(implementation, owner, new bytes(0))
         );
 
-        (,, address deployer) = vm.readCallers();
+        (, , address deployer) = vm.readCallers();
 
-        return isDeployerGuarded
-            ? deployCreate3AndInitWithGuardedSalt(deployer, salt, proxyInitCode, initData)
-            : deployCreate3AndInit(bytes32(salt), proxyInitCode, initData);
+        return
+            isDeployerGuarded
+                ? deployCreate3AndInitWithGuardedSalt(deployer, salt, proxyInitCode, initData)
+                : deployCreate3AndInit(bytes32(salt), proxyInitCode, initData);
+    }
+
+    function populateDeployment() public loadConfig {
+        console2.log("=== Starting Population ===");
+
+        // SymbioticCoreConstants.Core memory core;
+        // if (!SymbioticCoreConstants.coreSupported() && config.get("vault_factory").data.length == 0) {
+        //     console2.log("Deploying Symbiotic Core infrastructure...");
+        //     core = _initCore_SymbioticCore(false); // This sets symbioticCore state variable
+
+        //     // Save to config
+        //     config.set("vault_factory", address(core.vaultFactory));
+        //     // ... rest of config saves ...
+
+        //     console2.log("Symbiotic Core deployed");
+        // } else {
+        // Load existing core
+        // core = getCore();
+
+        symbioticCore = getCore();
+        // symbioticCore = core;
+        console2.log("Symbiotic Core loaded from config");
+        // }
+
+        // Load deployed Relay contracts
+        address keyRegistry = config.get("key_registry").toAddress();
+        address votingPowerProvider = config.get("voting_power_provider").toAddress();
+
+        require(keyRegistry != address(0), "KeyRegistry not deployed");
+        require(votingPowerProvider != address(0), "VotingPowerProvider not deployed");
+
+        console2.log("KeyRegistry:", keyRegistry);
+        console2.log("VotingPowerProvider:", votingPowerProvider);
+
+        // Deploy token
+        address token = _deployToken();
+
+        vm.startBroadcast(deployer.privateKey);
+        MyVotingPowerProvider(votingPowerProvider).registerToken(token);
+        vm.stopBroadcast();
+        console2.log("Token registered in voting power provider", token);
+
+        // Network registration
+        if (!symbioticCore.networkRegistry.isEntity(network)) {
+            _networkRegister_SymbioticCore(network);
+            console2.log("Network registered in symbiotic core", network);
+        }
+
+        _networkSetMiddleware_SymbioticCore(network, votingPowerProvider);
+        console2.log("Network middleware set in voting power provider", network);
+
+        // Vault deployment
+        address vault = _getVault_SymbioticCore(
+            VaultParams({
+                owner: deployer.addr,
+                collateral: token,
+                burner: 0x000000000000000000000000000000000000dEaD,
+                // epochDuration: uint48(1 days * 2),
+                epochDuration: uint48(86_400 seconds),
+                whitelistedDepositors: new address[](0),
+                depositLimit: 0,
+                delegatorIndex: 0,
+                hook: address(0),
+                network: address(0),
+                withSlasher: false,
+                slasherIndex: 0,
+                vetoDuration: uint48(2 hours)
+            })
+        );
+
+        console2.log("Vault deployed:", vault);
+
+        vm.startBroadcast(deployer.privateKey);
+        MyVotingPowerProvider(votingPowerProvider).registerSharedVault(vault);
+        vm.stopBroadcast();
+
+        _setMaxNetworkLimit_SymbioticCore(network, vault, SUBNETWORK_ID, type(uint256).max);
+
+        _setNetworkLimit_SymbioticCore(deployer.addr, vault, network.subnetwork(SUBNETWORK_ID), type(uint256).max);
+
+        console2.log("Vault initialized", vault);
+
+        // Register operators
+        for (uint256 i; i < NUM_OPERATORS; ++i) {
+            Vm.Wallet memory operator = getOperator(i);
+
+            console2.log("Operator ", operator.privateKey);
+
+            vm.startBroadcast(deployer.privateKey);
+            (bool success, ) = operator.addr.call{value: 1 ether}("");
+            require(success, "ETH transfer failed");
+            vm.stopBroadcast();
+
+            // Register in Symbiotic
+            _operatorRegister_SymbioticCore(operator.addr);
+
+            // Register in voting power provider
+            vm.startBroadcast(operator.privateKey);
+            MyVotingPowerProvider(votingPowerProvider).registerOperator();
+            vm.stopBroadcast();
+
+            // Opt into network
+            _operatorOptInWeak_SymbioticCore(operator.addr, network);
+            console2.log("Operator ", operator.addr, " opted in to network ", network);
+
+            // Opt into vault
+            _operatorOptInWeak_SymbioticCore(operator.addr, vault);
+            console2.log("Operator ", operator.addr, " opted in to vault ", vault);
+
+            // Set operator network shares
+            _setOperatorNetworkShares_SymbioticCore(
+                deployer.addr,
+                vault,
+                network.subnetwork(SUBNETWORK_ID),
+                operator.addr,
+                1e18
+            );
+
+            console2.log("Operator ", operator.addr, " network shares set");
+
+            // Register keys
+            _registerBlsBn254Key(operator, keyRegistry);
+            _registerBls12381Key(operator, keyRegistry);
+
+            console2.log("Operator ", operator.addr, " keys registered");
+            console2.log("Operator ", i, " successfully registered");
+        }
+
+        // Staker deposit
+        Vm.Wallet memory staker = getStaker(0);
+
+        // Fund the staker
+        vm.startBroadcast(deployer.privateKey);
+        (bool success, ) = staker.addr.call{value: 0.5 ether}("");
+        require(success, "ETH transfer to staker failed");
+        vm.stopBroadcast();
+        console2.log("Funded staker with 0.5 ETH:", staker.addr);
+
+        _deal_Symbiotic(token, staker.addr, _normalizeForToken_Symbiotic((0.03 * 1e18), token));
+        uint256 amount = (0.000_01 * 1e18) * NUM_OPERATORS * 2;
+        _stakerDeposit_SymbioticCore(staker.addr, vault, _normalizeForToken_Symbiotic(amount, token));
+        console2.log("Staker ", staker.addr, " deposited to vault ", vault);
+
+        // Setup genesis val set
+        ISettlement settlement = ISettlement(config.get("settlement").toAddress());
+        IValSetDriver valSetDriver = IValSetDriver(config.get("val_set_driver").toAddress());
+        uint8 requiredKeyTag = valSetDriver.getRequiredHeaderKeyTag();
+        console2.log("Required key tag:", requiredKeyTag);
+        ISettlement.ValSetHeader memory valSetHeader = ISettlement.ValSetHeader({
+            version: settlement.VALIDATOR_SET_VERSION(),
+            requiredKeyTag: requiredKeyTag,
+            epoch: 0,
+            captureTimestamp: uint48(vm.getBlockTimestamp()) - 1,
+            quorumThreshold: 20000000000001,
+            totalVotingPower: 30000000000000,
+            validatorsSszMRoot: bytes32(uint256(0xAAA))
+        });
+
+        // Commit to settlement
+        ISettlement.ExtraData[] memory extraData = new ISettlement.ExtraData[](0);
+        vm.startBroadcast(deployer.privateKey);
+        settlement.setGenesis(valSetHeader, extraData);
+        vm.stopBroadcast();
+
+        console2.log("Genesis set");
+
+        console2.log("=== Population Complete ===");
+    }
+
+    function getOperator(uint256 index) public returns (Vm.Wallet memory operator) {
+        // deterministic operator private key
+        operator = vm.createWallet(1e18 + index);
+        vm.rememberKey(operator.privateKey);
+        return operator;
+    }
+
+    function getStaker(uint256 index) public returns (Vm.Wallet memory staker) {
+        // deterministic staker private key
+        staker = vm.createWallet(STAKER_PRIVATE_KEY_OFFSET + index);
+        vm.rememberKey(staker.privateKey);
+        return staker;
+    }
+
+    function _deployToken() internal returns (address) {
+        console2.log("Deploying token...");
+
+        vm.startBroadcast(deployer.privateKey);
+        Token token = new Token("Test Token");
+        vm.stopBroadcast();
+
+        console2.log("Token deployed:", address(token));
+        return address(token);
+    }
+
+    // function _deployVaultWithStake(SymbioticCoreConstants.Core memory core, address token) internal returns (address) {
+    //     console2.log("Deploying vault... with token: ", token);
+
+    //     // Use the SymbioticCoreInit helper to deploy vault
+    //     address vault = _getVault_SymbioticCore(
+    //         VaultParams({
+    //             owner: deployer.addr,
+    //             collateral: token,
+    //             burner: 0x000000000000000000000000000000000000dEaD,
+    //             epochDuration: uint48(1 days * 2),
+    //             whitelistedDepositors: new address[](0),
+    //             depositLimit: 0,
+    //             delegatorIndex: 0,
+    //             hook: address(0),
+    //             network: address(0),
+    //             withSlasher: true,
+    //             slasherIndex: 0,
+    //             vetoDuration: uint48(1 hours * 2)
+    //         })
+    //     );
+
+    //     console2.log("Vault deployed:", vault);
+
+    //     // Register network if needed
+    //     if (!core.networkRegistry.isEntity(network.addr)) {
+    //         _networkRegister_SymbioticCore(network.addr);
+    //         console2.log("Network registered:", network.addr);
+    //     }
+
+    //     // Setup vault for network
+    //     _setMaxNetworkLimit_SymbioticCore(network.addr, vault, SUBNETWORK_ID, type(uint256).max);
+
+    //     _setNetworkLimit_SymbioticCore(deployer.addr, vault, network.addr.subnetwork(SUBNETWORK_ID), type(uint256).max);
+
+    //     console2.log("Vault configured for network");
+
+    //     // Register token and vault in VotingPowerProvider
+    //     vm.startBroadcast(deployer.privateKey);
+
+    //     // STEP 2: Then register the vault
+    //     MyVotingPowerProvider(config.get("voting_power_provider").toAddress()).registerSharedVault(vault);
+    //     console2.log("Vault registered in VotingPowerProvider");
+
+    //     vm.stopBroadcast();
+
+    //     console2.log("Vault registered in VotingPowerProvider");
+
+    //     return vault;
+    // }
+
+    // function _populateOperators(
+    //     SymbioticCoreConstants.Core memory core,
+    //     address vault,
+    //     address keyRegistry,
+    //     address votingPowerProvider
+    // ) internal {
+    //     console2.log("Registering operators...");
+
+    //     for (uint256 i = 0; i < NUM_OPERATORS; i++) {
+    //         Vm.Wallet memory operator = vm.createWallet(1e18 + i);
+
+    //         // Register in Symbiotic Core
+    //         _operatorRegister_SymbioticCore(operator.addr);
+    //         _operatorOptInWeak_SymbioticCore(operator.addr, network.addr);
+    //         _operatorOptInWeak_SymbioticCore(operator.addr, vault);
+
+    //         // Set operator network shares
+    //         _setOperatorNetworkShares_SymbioticCore(
+    //             deployer.addr,
+    //             vault,
+    //             network.addr.subnetwork(SUBNETWORK_ID),
+    //             operator.addr,
+    //             1e18
+    //         );
+
+    //         // Register in VotingPowerProvider
+    //         vm.prank(operator.addr);
+    //         try MyVotingPowerProvider(votingPowerProvider).registerOperator() {} catch {}
+    //         // Register keys
+    //         _registerBlsBn254Key(operator, keyRegistry);
+    //         _registerBls12381Key(operator, keyRegistry);
+    //     }
+
+    //     console2.log("All operators registered");
+    // }
+
+    // function _addStake(address vault, address token) internal {
+    //     console2.log("Adding stake...");
+
+    //     Vm.Wallet memory staker = vm.createWallet(2e18);
+    //     uint256 amount = 10_000 * 10 ** 18;
+
+    //     // Mint and deposit using SymbioticCoreInit helper
+    //     _deal_Symbiotic(token, staker.addr, amount);
+    //     _stakerDeposit_SymbioticCore(staker.addr, vault, amount);
+
+    //     console2.log("Staked", amount, "tokens");
+    // }
+
+    function _registerBlsBn254Key(Vm.Wallet memory operator, address keyRegistry) internal {
+        // Generate key components (no prank needed - this is just math)
+        BN254.G1Point memory keyG1 = BN254.generatorG1().scalar_mul(operator.privateKey);
+        BN254.G2Point memory keyG2 = _getG2Key(operator.privateKey);
+        bytes memory keyBytes = KeyBlsBn254.wrap(keyG1).toBytes();
+
+        bytes32 structHash = keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)));
+        bytes32 digest = MyKeyRegistry(keyRegistry).hashTypedDataV4(structHash);
+        BN254.G1Point memory messageG1 = BN254.hashToG1(digest);
+        BN254.G1Point memory signature = messageG1.scalar_mul(operator.privateKey);
+
+        uint8 keyTag = KEY_TYPE_BLS_BN254.getKeyTag(15);
+
+        // Broadcast with the OPERATOR's private key (not network's!)
+        vm.startBroadcast(operator.privateKey);
+        MyKeyRegistry(keyRegistry).setKey(keyTag, keyBytes, abi.encode(signature), abi.encode(keyG2));
+        vm.stopBroadcast();
+    }
+
+    function _registerBls12381Key(Vm.Wallet memory operator, address keyRegistry) internal {
+        // Generate key components
+        BLS12381.G1Point memory generator = BLS12381.negate(BLS12381.negGeneratorG1());
+        BLS12381.G1Point memory keyG1 = BLS12381.scalar_mul(generator, operator.privateKey);
+        BLS12381.G2Point memory keyG2 = _g2Mul(BLS12381.generatorG2(), bytes32(operator.privateKey));
+        bytes memory keyBytes = KeyBlsBls12381.wrap(keyG1).toBytes();
+
+        bytes32 structHash = keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)));
+        bytes32 digest = MyKeyRegistry(keyRegistry).hashTypedDataV4(structHash);
+        BLS12381.G1Point memory messageG1 = BLS12381.hashToG1(abi.encodePacked(digest));
+        BLS12381.G1Point memory signature = BLS12381.scalar_mul(messageG1, operator.privateKey);
+
+        uint8 keyTag = KEY_TYPE_BLS_BLS12381.getKeyTag(2);
+
+        // Broadcast with the OPERATOR's private key
+        vm.startBroadcast(operator.privateKey);
+        MyKeyRegistry(keyRegistry).setKey(keyTag, keyBytes, abi.encode(signature), abi.encode(keyG2));
+        vm.stopBroadcast();
+    }
+
+    function _getG2Key(uint256 privateKey) internal view returns (BN254.G2Point memory) {
+        BN254.G2Point memory G2 = BN254.generatorG2();
+        (uint256 x1, uint256 x2, uint256 y1, uint256 y2) = BN254G2.ECTwistMul(
+            privateKey,
+            G2.X[1],
+            G2.X[0],
+            G2.Y[1],
+            G2.Y[0]
+        );
+        return BN254.G2Point([x2, x1], [y2, y1]);
+    }
+
+    function _g2Mul(
+        BLS12381.G2Point memory point,
+        bytes32 scalar
+    ) internal view returns (BLS12381.G2Point memory result) {
+        BLS12381.G2Point[] memory points = new BLS12381.G2Point[](1);
+        bytes32[] memory scalars = new bytes32[](1);
+        points[0] = point;
+        scalars[0] = scalar;
+
+        assembly ("memory-safe") {
+            let k := mload(points)
+            let d := sub(scalars, points)
+            for {
+                let i := 0
+            } iszero(eq(i, k)) {
+                i := add(i, 1)
+            } {
+                points := add(points, 0x20)
+                let o := add(result, mul(0x120, i))
+                mcopy(o, mload(points), 0x100)
+                mstore(add(o, 0x100), mload(add(d, points)))
+            }
+            if iszero(
+                and(
+                    and(eq(k, mload(scalars)), eq(returndatasize(), 0x100)),
+                    staticcall(gas(), BLS12_G2MSM, result, mul(0x120, k), result, 0x100)
+                )
+            ) {
+                mstore(0x00, 0xe3dc5425)
+                revert(0x1c, 0x04)
+            }
+        }
     }
 }

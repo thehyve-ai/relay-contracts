@@ -222,3 +222,10 @@ run_contract_deploy "keyRegistry" "runDeployKeyRegistry()" "KeyRegistry deployme
 run_contract_deploy "votingPowerProvider" "runDeployVotingPowerProvider()" "VotingPowerProvider deployment"
 run_contract_deploy "settlement" "runDeploySettlement()" "Settlement deployment"
 run_contract_deploy "valSetDriver" "runDeployValSetDriver()" "ValSetDriver deployment"
+
+echo "Running population..."
+forge script "$script_path" \
+  --sig "runPopulateDeployment()" \
+  --chain-id "$chain_id" \
+  --rpc-url "$(get_chain_rpc_url "$config_path" "$chain_id")" \
+  "$@"

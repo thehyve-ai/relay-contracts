@@ -154,20 +154,25 @@ contract KeyRegistry is OzEIP712, MulticallUpgradeable, IKeyRegistry {
         _setKey(msg.sender, tag, key, signature, extraData);
     }
 
-    function _setKey(address operator, uint8 tag, bytes memory key, bytes memory signature, bytes memory extraData)
-        internal
-        virtual
-    {
+    function _setKey(
+        address operator,
+        uint8 tag,
+        bytes memory key,
+        bytes memory signature,
+        bytes memory extraData
+    ) internal virtual {
         IKeyRegistry.KeyRegistryStorage storage $ = _getKeyRegistryStorage();
 
         bytes32 keyHash = keccak256(key);
-        if (!_verifyKey(
+        if (
+            !_verifyKey(
                 tag,
                 key,
                 signature,
                 extraData,
                 abi.encode(hashTypedDataV4(keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator, keyHash))))
-            )) {
+            )
+        ) {
             revert IKeyRegistry.KeyRegistry_InvalidKeySignature();
         }
 
@@ -181,8 +186,8 @@ contract KeyRegistry is OzEIP712, MulticallUpgradeable, IKeyRegistry {
                 revert IKeyRegistry.KeyRegistry_AlreadyUsed();
             }
             if (
-                $._operatorByTypeAndKeyHash[type_][keyHash] != address(0)
-                    && $._operatorByTagAndKeyHash[tag][keyHash] == address(0)
+                $._operatorByTypeAndKeyHash[type_][keyHash] != address(0) &&
+                $._operatorByTagAndKeyHash[tag][keyHash] == address(0)
             ) {
                 revert IKeyRegistry.KeyRegistry_AlreadyUsed();
             }
@@ -194,7 +199,8 @@ contract KeyRegistry is OzEIP712, MulticallUpgradeable, IKeyRegistry {
 
         $._operators.add(uint48(block.timestamp), operator);
         $._operatorKeyTags[operator].push(
-            uint48(block.timestamp), uint128($._operatorKeyTags[operator].latest()).add(tag)
+            uint48(block.timestamp),
+            uint128($._operatorKeyTags[operator].latest()).add(tag)
         );
         _setKey(operator, tag, key);
 
@@ -225,8 +231,10 @@ contract KeyRegistry is OzEIP712, MulticallUpgradeable, IKeyRegistry {
 
     function _setKey64(address operator, uint8 tag, bytes memory key) internal {
         (bytes32 compressedKey1, bytes32 compressedKey2) = abi.decode(key, (bytes32, bytes32));
-        _getKeyRegistryStorage()
-        ._keys64[operator][tag].push(uint48(block.timestamp), [uint256(compressedKey1), uint256(compressedKey2)]);
+        _getKeyRegistryStorage()._keys64[operator][tag].push(
+            uint48(block.timestamp),
+            [uint256(compressedKey1), uint256(compressedKey2)]
+        );
     }
 
     function _verifyKey(

@@ -3,12 +3,21 @@ pragma solidity ^0.8.25;
 
 import {EqualStakeVPCalc} from "../src/modules/voting-power/common/voting-power-calc/EqualStakeVPCalc.sol";
 import {OperatorVaults} from "../src/modules/voting-power/extensions/OperatorVaults.sol";
+import {SharedVaults} from "../src/modules/voting-power/extensions/SharedVaults.sol";
+import {MultiToken} from "../src/modules/voting-power/extensions/MultiToken.sol";
 import {OzOwnable} from "../src/modules/common/permissions/OzOwnable.sol";
 import {VotingPowerProvider} from "../src/modules/voting-power/VotingPowerProvider.sol";
 
 /// @title MyVotingPowerProvider
 /// @notice Example implementation of the VotingPowerProvider contract.
-contract MyVotingPowerProvider is VotingPowerProvider, OzOwnable, EqualStakeVPCalc, OperatorVaults {
+contract MyVotingPowerProvider is
+    VotingPowerProvider,
+    OzOwnable,
+    EqualStakeVPCalc,
+    OperatorVaults,
+    SharedVaults,
+    MultiToken
+{
     constructor(address operatorRegistry, address vaultFactory) VotingPowerProvider(operatorRegistry, vaultFactory) {}
 
     function initialize(

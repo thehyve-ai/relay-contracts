@@ -16,7 +16,13 @@ import {Network} from "@symbioticfi/network/src/Network.sol";
 import {MyValSetDriver} from "../examples/MyValSetDriver.sol";
 import {KeyEcdsaSecp256k1} from "../src/libraries/keys/KeyEcdsaSecp256k1.sol";
 import {KeyBlsBn254, BN254} from "../src/libraries/keys/KeyBlsBn254.sol";
-import {KEY_TYPE_BLS_BN254, KEY_TYPE_ECDSA_SECP256K1} from "../src/interfaces/modules/key-registry/IKeyRegistry.sol";
+import {KeyBlsBls12381} from "../src/libraries/keys/KeyBlsBls12381.sol";
+import {BLS12381} from "../src/libraries/utils/BLS12381.sol";
+import {
+    KEY_TYPE_BLS_BN254,
+    KEY_TYPE_ECDSA_SECP256K1,
+    KEY_TYPE_BLS_BLS12381
+} from "../src/interfaces/modules/key-registry/IKeyRegistry.sol";
 import {BN254G2} from "../test/helpers/BN254G2.sol";
 import {IOzEIP712} from "../src/interfaces/modules/base/IOzEIP712.sol";
 import {IKeyRegistry} from "../src/interfaces/modules/key-registry/IKeyRegistry.sol";
@@ -25,6 +31,9 @@ contract InitSetupTest is SymbioticCoreInit {
     using KeyTags for uint8;
     using KeyBlsBn254 for BN254.G1Point;
     using BN254 for BN254.G1Point;
+    using KeyBlsBls12381 for KeyBlsBls12381.KEY_BLS_BLS12381;
+    using BLS12381 for BLS12381.G1Point;
+    using BLS12381 for BLS12381.G2Point;
     using KeyBlsBn254 for KeyBlsBn254.KEY_BLS_BN254;
     using SymbioticSubnetwork for address;
 
@@ -121,7 +130,8 @@ contract InitSetupTest is SymbioticCoreInit {
                     initSetupParams.masterChain.tokens[j],
                     staker.addr,
                     _normalizeForToken_Symbiotic(
-                        SYMBIOTIC_CORE_TOKENS_TO_SET_TIMES_1e18, initSetupParams.masterChain.tokens[j]
+                        SYMBIOTIC_CORE_TOKENS_TO_SET_TIMES_1e18,
+                        initSetupParams.masterChain.tokens[j]
                     ),
                     true
                 );
@@ -156,7 +166,10 @@ contract InitSetupTest is SymbioticCoreInit {
             );
 
             _setMaxNetworkLimit_SymbioticCore(
-                vars.network.addr, initSetupParams.masterChain.vaults[i], IDENTIFIER, type(uint256).max
+                vars.network.addr,
+                initSetupParams.masterChain.vaults[i],
+                IDENTIFIER,
+                type(uint256).max
             );
             _setNetworkLimit_SymbioticCore(
                 vars.deployer.addr,
@@ -200,6 +213,27 @@ contract InitSetupTest is SymbioticCoreInit {
                 BN254.G1Point memory messageG1 = BN254.hashToG1(messageHash0);
                 BN254.G1Point memory sigG1 = messageG1.scalar_mul(operator.privateKey);
                 keyRegistry.setKey(KEY_TYPE_BLS_BN254.getKeyTag(15), key0Bytes, abi.encode(sigG1), abi.encode(keyG2));
+
+                // BLS12-381
+                BLS12381.G1Point memory generator = BLS12381.negate(BLS12381.negGeneratorG1());
+                BLS12381.G1Point memory keyG1_bls12381 = _g1Mul(generator, operator.privateKey);
+                BLS12381.G2Point memory keyG2_bls12381 = _g2Mul(BLS12381.generatorG2(), operator.privateKey);
+
+                bytes memory keyBytes_bls12381 = KeyBlsBls12381.wrap(keyG1_bls12381).toBytes();
+                bytes32 messageHash1 = keyRegistry.hashTypedDataV4(
+                    keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes_bls12381)))
+                );
+
+                BLS12381.G1Point memory messageG1_bls12381 = BLS12381.hashToG1(abi.encodePacked(messageHash1));
+                BLS12381.G1Point memory sig_bls12381 = _g1Mul(messageG1_bls12381, operator.privateKey);
+
+                keyRegistry.setKey(
+                    KEY_TYPE_BLS_BLS12381.getKeyTag(2),
+                    keyBytes_bls12381,
+                    abi.encode(sig_bls12381),
+                    abi.encode(keyG2_bls12381)
+                );
+
                 vm.stopPrank();
             }
             console2.log("Operator initialized", operator.addr);
@@ -212,9 +246,11 @@ contract InitSetupTest is SymbioticCoreInit {
                     staker.addr,
                     initSetupParams.masterChain.vaults[j],
                     _normalizeForToken_Symbiotic(
-                            SYMBIOTIC_CORE_MIN_TOKENS_TO_DEPOSIT_TIMES_1e18 * SYMBIOTIC_CORE_NUMBER_OF_OPERATORS,
-                            initSetupParams.masterChain.tokens[0]
-                        ) * (i + 1) + j
+                        SYMBIOTIC_CORE_MIN_TOKENS_TO_DEPOSIT_TIMES_1e18 * SYMBIOTIC_CORE_NUMBER_OF_OPERATORS,
+                        initSetupParams.masterChain.tokens[0]
+                    ) *
+                        (i + 1) +
+                        j
                 );
                 console2.log("Staker ", staker.addr, " deposited to vault ", initSetupParams.masterChain.vaults[j]);
             }
@@ -249,8 +285,60 @@ contract InitSetupTest is SymbioticCoreInit {
 
     function getG2Key(uint256 privateKey) public view returns (BN254.G2Point memory) {
         BN254.G2Point memory G2 = BN254.generatorG2();
-        (uint256 x1, uint256 x2, uint256 y1, uint256 y2) =
-            BN254G2.ECTwistMul(privateKey, G2.X[1], G2.X[0], G2.Y[1], G2.Y[0]);
+        (uint256 x1, uint256 x2, uint256 y1, uint256 y2) = BN254G2.ECTwistMul(
+            privateKey,
+            G2.X[1],
+            G2.X[0],
+            G2.Y[1],
+            G2.Y[0]
+        );
         return BN254.G2Point([x2, x1], [y2, y1]);
+    }
+
+    function _g1Mul(
+        BLS12381.G1Point memory point,
+        bytes32 scalar
+    ) internal view returns (BLS12381.G1Point memory result) {
+        result = BLS12381.scalar_mul(point, uint256(scalar));
+    }
+
+    function _g2Mul(
+        BLS12381.G2Point memory point,
+        bytes32 scalar
+    ) internal view returns (BLS12381.G2Point memory result) {
+        BLS12381.G2Point[] memory points = new BLS12381.G2Point[](1);
+        bytes32[] memory scalars = new bytes32[](1);
+        points[0] = point;
+        scalars[0] = scalar;
+        result = _g2Msm(points, scalars);
+    }
+
+    function _g2Msm(
+        BLS12381.G2Point[] memory points,
+        bytes32[] memory scalars
+    ) internal view returns (BLS12381.G2Point memory result) {
+        assembly ("memory-safe") {
+            let k := mload(points)
+            let d := sub(scalars, points)
+            for {
+                let i := 0
+            } iszero(eq(i, k)) {
+                i := add(i, 1)
+            } {
+                points := add(points, 0x20)
+                let o := add(result, mul(0x120, i))
+                mcopy(o, mload(points), 0x100)
+                mstore(add(o, 0x100), mload(add(d, points)))
+            }
+            if iszero(
+                and(
+                    and(eq(k, mload(scalars)), eq(returndatasize(), 0x100)),
+                    staticcall(gas(), BLS12_G2MSM, result, mul(0x120, k), result, 0x100)
+                )
+            ) {
+                mstore(0x00, 0xe3dc5425) // `G2MSMFailed()`.
+                revert(0x1c, 0x04)
+            }
+        }
     }
 }
