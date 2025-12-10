@@ -162,7 +162,7 @@ contract MyRelayDeploy is RelayDeploy {
                     }),
                     epochManagerInitParams: IEpochManager.EpochManagerInitParams({
                         epochDuration: EPOCH_DURATION,
-                        epochDurationTimestamp: 0
+                        epochDurationTimestamp: uint48(vm.getBlockTimestamp() + DEPLOYMENT_BUFFER)
                     }),
                     numAggregators: NUM_AGGREGATORS,
                     numCommitters: NUM_COMMITTERS,

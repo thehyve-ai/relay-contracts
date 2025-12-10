@@ -546,24 +546,41 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
         _stakerDeposit_SymbioticCore(staker.addr, vault, _normalizeForToken_Symbiotic(amount, token));
         console2.log("Staker ", staker.addr, " deposited to vault ", vault);
 
+        // Advance time to epoch 0 start + 1 second
+        IValSetDriver valSetDriver = IValSetDriver(config.get("val_set_driver").toAddress());
+        uint48 epochStart = valSetDriver.getEpochStart(0);
+        console2.log("Epoch 0 starts at:", epochStart);
+        console2.log("Current block.timestamp BEFORE warp:", block.timestamp);
+
+        // vm.warp(epochStart + 100);
+        // console2.log("Warped to:", epochStart + 100);
+        console2.log("Current block.timestamp AFTER warp:", block.timestamp);
+
         // Setup genesis val set
         ISettlement settlement = ISettlement(config.get("settlement").toAddress());
-        IValSetDriver valSetDriver = IValSetDriver(config.get("val_set_driver").toAddress());
-        uint8 requiredKeyTag = valSetDriver.getRequiredHeaderKeyTag();
-        console2.log("Required key tag:", requiredKeyTag);
+        uint48 lastCommittedEpoch = settlement.getLastCommittedHeaderEpoch();
+        console2.log("Last committed epoch:", lastCommittedEpoch);
+
+        uint48 timestamp_test = settlement.getCaptureTimestampFromValSetHeaderAt(lastCommittedEpoch);
+        console2.log("Timestamp test:", timestamp_test);
+
         ISettlement.ValSetHeader memory valSetHeader = ISettlement.ValSetHeader({
             version: settlement.VALIDATOR_SET_VERSION(),
-            requiredKeyTag: requiredKeyTag,
-            epoch: 0,
-            captureTimestamp: uint48(vm.getBlockTimestamp()) - 1,
+            requiredKeyTag: valSetDriver.getRequiredHeaderKeyTag(),
+            epoch: valSetDriver.getCurrentEpoch(),
+            captureTimestamp: valSetDriver.getCurrentEpochStart(),
             quorumThreshold: 20000000000001,
             totalVotingPower: 30000000000000,
             validatorsSszMRoot: bytes32(uint256(0xAAA))
         });
 
+        console2.log("captureTimestamp:", valSetHeader.captureTimestamp);
+        console2.log("block.timestamp before broadcast:", block.timestamp);
+
         // Commit to settlement
         ISettlement.ExtraData[] memory extraData = new ISettlement.ExtraData[](0);
         vm.startBroadcast(deployer.privateKey);
+        console2.log("block.timestamp during broadcast:", block.timestamp);
         settlement.setGenesis(valSetHeader, extraData);
         vm.stopBroadcast();
 
