@@ -198,8 +198,4 @@ contract MyRelayDeploy is RelayDeploy {
     function runDeployValSetDriver() public override {
         deployValSetDriver({proxyOwner: network, isDeployerGuarded: true, salt: VALSET_DRIVER_SALT});
     }
-
-    function runPopulateDeployment() public override {
-        populateDeployment();
-    }
 }

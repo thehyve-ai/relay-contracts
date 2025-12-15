@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.25;
+
 import {MyRelayDeploy} from "./MyRelayDeploy.sol";
 import {console2} from "forge-std/Script.sol";
 import {IValSetDriver} from "../../src/interfaces/modules/valset-driver/IValSetDriver.sol";
@@ -57,13 +60,16 @@ contract MyRelayDeployWithPopulate is MyRelayDeploy {
         console2.log("Core deployed");
     }
 
-    // function _deployToken() internal returns (address) {
-    //     vm.startBroadcast(deployer.privateKey);
-    //     Token token = new Token("Test Token");
-    //     vm.stopBroadcast();
-    //     console2.log("Token deployed:", address(token));
-    //     return address(token);
-    // }
+    function _deployToken() internal returns (address) {
+        console2.log("Deploying token...");
+
+        vm.startBroadcast(deployer.privateKey);
+        Token token = new Token("Test Token");
+        vm.stopBroadcast();
+
+        console2.log("Token deployed:", address(token));
+        return address(token);
+    }
 
     function _deployVault(address token) internal returns (address) {
         // Deploy vault
@@ -177,24 +183,8 @@ contract MyRelayDeployWithPopulate is MyRelayDeploy {
     }
 
     function runSetGenesis() public loadConfig {
-        // Advance time to epoch 0 start + 1 second
         IValSetDriver valSetDriver = IValSetDriver(config.get("val_set_driver").toAddress());
-        uint48 epochStart = valSetDriver.getEpochStart(0);
-        console2.log("Epoch 0 starts at:", epochStart);
-        // console2.log("Current block.timestamp BEFORE warp:", block.timestamp);
-
-        // // vm.warp(epochStart + 100);
-        // // console2.log("Warped to:", epochStart + 100);
-        // console2.log("Current block.timestamp AFTER warp:", block.timestamp);
-
-        // // Setup genesis val set
         ISettlement settlement = ISettlement(config.get("settlement").toAddress());
-        // uint48 lastCommittedEpoch = settlement.getLastCommittedHeaderEpoch();
-        // console2.log("Last committed epoch:", lastCommittedEpoch);
-
-        // uint48 timestamp_test = settlement.getCaptureTimestampFromValSetHeaderAt(lastCommittedEpoch);
-        // console2.log("Timestamp test:", timestamp_test);
-
         ISettlement.ValSetHeader memory valSetHeader = ISettlement.ValSetHeader({
             version: settlement.VALIDATOR_SET_VERSION(),
             requiredKeyTag: valSetDriver.getRequiredHeaderKeyTag(),
@@ -205,13 +195,9 @@ contract MyRelayDeployWithPopulate is MyRelayDeploy {
             validatorsSszMRoot: bytes32(uint256(0xAAA))
         });
 
-        // console2.log("captureTimestamp:", valSetHeader.captureTimestamp);
-        // console2.log("block.timestamp before broadcast:", block.timestamp);
-
         // Commit to settlement
         ISettlement.ExtraData[] memory extraData = new ISettlement.ExtraData[](0);
         vm.startBroadcast(deployer.privateKey);
-        console2.log("block.timestamp during broadcast:", block.timestamp);
         settlement.setGenesis(valSetHeader, extraData);
         vm.stopBroadcast();
 
