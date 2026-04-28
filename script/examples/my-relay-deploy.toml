@@ -1,15 +1,26 @@
 [31337]
 endpoint_url = "http://127.0.0.1:8545"
 
-[31338]
-endpoint_url = "http://127.0.0.1:8546"
+[31337.address]
+vault_factory = "0xD58840589338B3684B161a95F82831e36f7718dE"
+delegator_factory = "0x839250a6D3e9A98069dF6Dbb1a35E66fE6906b4f"
+slasher_factory = "0x278380c726bBa1531aaa635b0457aAe6f6B7E9D7"
+network_registry = "0xe3bc38596703198363aEe3C272bD030278677A95"
+operator_registry = "0x8332d45fA855ee16BB40Dbd71fc3e2Cf326a5876"
+operator_metadata_service = "0x24bc8D8D420Bbe51fBe192f1EeD6caa8FA7B5fC4"
+network_metadata_service = "0x86EC63d2b1A73Ee2F5f349e0Fc6b840877AEB0eD"
+network_middleware_service = "0xC43eFE387646315D7e0cfb01d51369e151736541"
+operator_vault_opt_in_service = "0x96576D4c50AAbf4dfB4dce65253913a7390Cca51"
+operator_network_opt_in_service = "0x4b4620ebe20131A111212820b0bA76dC6C79F0Ce"
+vault_configurator = "0xCEA13d143CfBdd605f319e03F38fDbaB636Be144"
+key_registry = "0x2cDE75aa7Dc418EFaA0314dd22bF89dA2883cEE3"
+voting_power_provider = "0xa7D1ACdBdb22Dbd660c1B45b06C8B81ee1ec9A91"
+settlement = "0x9A5bcFe47845bAb272216e2aA505FA972b4f83aD"
+val_set_driver = "0x2b2AB35d96a0CF90fe7841c8BB23633279d29B15"
 
 [1234567890]
 endpoint_url = ""
 keyRegistry = 31337
 votingPowerProvider = [31337]
-settlement = [
-    31337,
-    31338,
-]
+settlement = [31337]
 valSetDriver = 31337
