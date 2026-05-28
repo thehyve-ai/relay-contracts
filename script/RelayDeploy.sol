@@ -50,7 +50,7 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
     using KeyBlsBls12381 for KeyBlsBls12381.KEY_BLS_BLS12381;
     using SymbioticSubnetwork for address;
 
-    uint256 public constant NUM_OPERATORS = 16;
+    uint256 public constant NUM_OPERATORS = 4;
     uint256 public constant NUM_VAULTS = 1;
     uint256 public constant NUM_STAKERS = 1;
     uint96 public constant SUBNETWORK_ID = 0;
