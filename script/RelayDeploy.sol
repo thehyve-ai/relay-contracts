@@ -438,7 +438,8 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
 
     function _registerBls12381Key(Vm.Wallet memory operator, address keyRegistry) internal {
         // Generate key components
-        BLS12381.G1Point memory generator = BLS12381.negate(BLS12381.negGeneratorG1());
+        // BLS12381.G1Point memory generator = BLS12381.negate(BLS12381.negGeneratorG1());
+        BLS12381.G1Point memory generator = BLS12381.generatorG1();
         BLS12381.G1Point memory keyG1 = BLS12381.scalar_mul(generator, operator.privateKey);
         BLS12381.G2Point memory keyG2 = _g2Mul(BLS12381.generatorG2(), bytes32(operator.privateKey));
         bytes memory keyBytes = KeyBlsBls12381.wrap(keyG1).toBytes();

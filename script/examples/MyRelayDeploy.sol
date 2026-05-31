@@ -59,8 +59,8 @@ contract MyRelayDeploy is RelayDeploy {
     string public constant VALSET_DRIVER_VERSION = "1";
     uint48 public constant EPOCH_DURATION = 86_400;
     uint48 public constant COMMITTER_SLOT_DURATION = 21_600;
-    uint208 public constant NUM_AGGREGATORS = 1;
-    uint208 public constant NUM_COMMITTERS = 1;
+    uint208 public constant NUM_AGGREGATORS = 4;
+    uint208 public constant NUM_COMMITTERS = 4;
     uint256 public constant MAX_VOTING_POWER = 1_000_000 * 10 ** 18;
     uint256 public constant MIN_INCLUSION_VOTING_POWER = 1000 * 10 ** 18;
     uint208 public constant MAX_VALIDATORS_COUNT = 1000;
