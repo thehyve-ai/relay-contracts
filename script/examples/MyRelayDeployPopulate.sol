@@ -6,13 +6,24 @@ import {console2} from "forge-std/Script.sol";
 import {IValSetDriver} from "../../src/interfaces/modules/valset-driver/IValSetDriver.sol";
 import {IEpochManager} from "../../src/interfaces/modules/valset-driver/IEpochManager.sol";
 import {ISettlement} from "../../src/interfaces/modules/settlement/ISettlement.sol";
+import {KeyRegistry} from "../../src/modules/key-registry/KeyRegistry.sol";
 import {MyVotingPowerProvider} from "../../examples/MyVotingPowerProvider.sol";
 import {Token} from "@symbioticfi/core/test/mocks/Token.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {KeyBlsBn254, BN254} from "../../src/libraries/keys/KeyBlsBn254.sol";
+import {KeyBlsBls12381} from "../../src/libraries/keys/KeyBlsBls12381.sol";
+import {BLS12381} from "../../src/libraries/utils/BLS12381.sol";
+import {BN254G2} from "../utils/BN254G2.sol";
+import {BLS12381G2} from "../utils/BLS12381G2.sol";
+import {KEY_TYPE_BLS_BN254, KEY_TYPE_BLS_BLS12381} from "../../src/interfaces/modules/key-registry/IKeyRegistry.sol";
 import "@symbioticfi/core/test/integration/SymbioticCoreImports.sol";
 
 contract MyRelayDeployWithPopulate is MyRelayDeploy {
     using SymbioticSubnetwork for address;
+    using BN254 for BN254.G1Point;
+    using BLS12381 for BLS12381.G1Point;
+    using KeyBlsBn254 for KeyBlsBn254.KEY_BLS_BN254;
+    using KeyBlsBls12381 for KeyBlsBls12381.KEY_BLS_BLS12381;
 
     constructor() MyRelayDeploy() {}
 
@@ -105,13 +116,14 @@ contract MyRelayDeployWithPopulate is MyRelayDeploy {
     }
 
     function _setupOperators(address vault) internal {
-        address keyRegistry = config.get("key_registry").toAddress();
+        // address keyRegistry = config.get("key_registry").toAddress();
+        KeyRegistry keyRegistry = KeyRegistry(getKeyRegistry().addr);
         for (uint256 i = 0; i < NUM_OPERATORS; i++) {
             Vm.Wallet memory operator = getOperator(i);
 
             // Fund operator with ETH
             vm.startBroadcast(deployer.privateKey);
-            (bool success, ) = operator.addr.call{value: 1 ether}("");
+            (bool success, ) = operator.addr.call{value: 10 ether}("");
             require(success, "ETH transfer failed");
             vm.stopBroadcast();
 
@@ -130,8 +142,10 @@ contract MyRelayDeployWithPopulate is MyRelayDeploy {
             );
 
             // Register keys
-            _registerBlsBn254Key(operator, keyRegistry);
-            _registerBls12381Key(operator, keyRegistry);
+            _registerBlsBn254Key(keyRegistry, operator, operator.privateKey, 15);
+            _registerBls12381Key(keyRegistry, operator, operator.privateKey + 10_000, 0);
+            // _registerBlsBn254Key(operator, keyRegistry);
+            // _registerBls12381Key(operator, keyRegistry);
 
             console2.log("Operator", i, "registered:", operator.addr);
         }
@@ -181,4 +195,57 @@ contract MyRelayDeployWithPopulate is MyRelayDeploy {
             console2.log("Operator ", operator.addr, " registered in voting power provider");
         }
     }
+
+    // function _registerBlsBn254Key(
+    //     KeyRegistry keyRegistry,
+    //     Vm.Wallet memory operator,
+    //     uint256 privateKey,
+    //     uint8 keyTag
+    // ) internal {
+    //     (BN254.G1Point memory g1Key, BN254.G2Point memory g2Key) = getBLSKeys(privateKey);
+    //     bytes memory keyBytes = KeyBlsBn254.wrap(g1Key).toBytes();
+    //     bytes32 messageHash = keyRegistry.hashTypedDataV4(
+    //         keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)))
+    //     );
+    //     BN254.G1Point memory messageG1 = BN254.hashToG1(messageHash);
+    //     BN254.G1Point memory sigG1 = messageG1.scalar_mul(privateKey);
+    //     keyRegistry.setKey(KEY_TYPE_BLS_BN254.getKeyTag(keyTag), keyBytes, abi.encode(sigG1), abi.encode(g2Key));
+    // }
+
+    // function getBLSKeys(uint256 privateKey) public returns (BN254.G1Point memory, BN254.G2Point memory) {
+    //     BN254.G1Point memory G1Key = BN254.generatorG1().scalar_mul(privateKey);
+    //     BN254.G2Point memory G2 = BN254.generatorG2();
+    //     (uint256 x1, uint256 x2, uint256 y1, uint256 y2) = BN254G2.ECTwistMul(
+    //         privateKey,
+    //         G2.X[1],
+    //         G2.X[0],
+    //         G2.Y[1],
+    //         G2.Y[0]
+    //     );
+    //     return (G1Key, BN254.G2Point([x2, x1], [y2, y1]));
+    // }
+
+    // function _registerBls12381Key(
+    //     KeyRegistry keyRegistry,
+    //     Vm.Wallet memory operator,
+    //     uint256 privateKey,
+    //     uint8 keyTag
+    // ) internal {
+    //     (BLS12381.G1Point memory g1Key, BLS12381.G2Point memory g2Key) = getBLS12381Keys(privateKey);
+    //     bytes memory keyBytes = KeyBlsBls12381.wrap(g1Key).toBytes();
+    //     bytes32 messageHash = keyRegistry.hashTypedDataV4(
+    //         keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)))
+    //     );
+    //     BLS12381.G1Point memory messageG1 = BLS12381.hashToG1(abi.encodePacked(messageHash));
+    //     BLS12381.G1Point memory sigG1 = messageG1.scalar_mul(privateKey);
+    //     keyRegistry.setKey(KEY_TYPE_BLS_BLS12381.getKeyTag(keyTag), keyBytes, abi.encode(sigG1), abi.encode(g2Key));
+    // }
+
+    // function getBLS12381Keys(
+    //     uint256 privateKey
+    // ) public view returns (BLS12381.G1Point memory, BLS12381.G2Point memory) {
+    //     BLS12381.G1Point memory G1Key = BLS12381.generatorG1().scalar_mul(privateKey);
+    //     BLS12381.G2Point memory G2Key = BLS12381G2.scalarMul(privateKey, BLS12381.generatorG2());
+    //     return (G1Key, G2Key);
+    // }
 }

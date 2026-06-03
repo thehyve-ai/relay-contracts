@@ -44,7 +44,8 @@ contract MyRelayDeploy is RelayDeploy {
     string public constant VOTING_POWER_PROVIDER_VERSION = "1";
     bool public constant REQUIRE_SLASHER = false;
     uint48 public constant MIN_VAULT_EPOCH_DURATION = 60;
-    uint256 public constant DEPLOYMENT_BUFFER = 600;
+    uint256 public constant DEPLOYMENT_BUFFER = 30;
+    // uint256 public constant DEPLOYMENT_BUFFER = 600;
     address public constant TOKEN_ADDRESS = address(0);
     bytes11 public constant VOTING_POWER_PROVIDER_SALT = "VPProvider";
 
@@ -57,12 +58,16 @@ contract MyRelayDeploy is RelayDeploy {
     // ValSet driver parameters
     string public constant VALSET_DRIVER_NAME = "MyValSetDriver";
     string public constant VALSET_DRIVER_VERSION = "1";
-    uint48 public constant EPOCH_DURATION = 86_400;
-    uint48 public constant COMMITTER_SLOT_DURATION = 21_600;
+    uint48 public constant EPOCH_DURATION = 60;
+    // uint48 public constant EPOCH_DURATION = 86_400;
+    uint48 public constant COMMITTER_SLOT_DURATION = 10;
+    // uint48 public constant COMMITTER_SLOT_DURATION = 21_600;
     uint208 public constant NUM_AGGREGATORS = 4;
     uint208 public constant NUM_COMMITTERS = 4;
-    uint256 public constant MAX_VOTING_POWER = 1_000_000 * 10 ** 18;
-    uint256 public constant MIN_INCLUSION_VOTING_POWER = 1000 * 10 ** 18;
+    // uint256 public constant MAX_VOTING_POWER = 1_000_000 * 10 ** 18;
+    // uint256 public constant MIN_INCLUSION_VOTING_POWER = 1000 * 10 ** 18;
+    uint256 internal constant MAX_VOTING_POWER = 2 ** 247; // no max limit
+    uint256 internal constant MIN_INCLUSION_VOTING_POWER = 0; // include anyone
     uint208 public constant MAX_VALIDATORS_COUNT = 1000;
     // uint8 public constant REQUIRED_HEADER_KEY_TAG = 15;
     uint32 public constant VERIFICATION_TYPE = 1;
@@ -143,8 +148,9 @@ contract MyRelayDeploy is RelayDeploy {
         vm.broadcast();
         implementation = address(new MyValSetDriver());
 
-        uint8[] memory requiredKeyTags = new uint8[](1);
+        uint8[] memory requiredKeyTags = new uint8[](2);
         requiredKeyTags[0] = REQUIRED_HEADER_KEY_TAG;
+        requiredKeyTags[1] = 32;
 
         IValSetDriver.QuorumThreshold[] memory quorumThresholds = new IValSetDriver.QuorumThreshold[](1);
         quorumThresholds[0] = IValSetDriver.QuorumThreshold({

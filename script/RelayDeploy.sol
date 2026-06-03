@@ -24,12 +24,15 @@ import {ISettlement} from "../src/interfaces/modules/settlement/ISettlement.sol"
 import {MyKeyRegistry} from "../examples/MyKeyRegistry.sol";
 import {MyVotingPowerProvider} from "../examples/MyVotingPowerProvider.sol";
 import {IKeyRegistry} from "../src/interfaces/modules/key-registry/IKeyRegistry.sol";
+import {KeyRegistry} from "../src/modules/key-registry/KeyRegistry.sol";
 import {IVotingPowerProvider} from "../src/interfaces/modules/voting-power/IVotingPowerProvider.sol";
 import {KeyBlsBn254, BN254} from "../src/libraries/keys/KeyBlsBn254.sol";
 import {KeyBlsBls12381} from "../src/libraries/keys/KeyBlsBls12381.sol";
 import {BLS12381} from "../src/libraries/utils/BLS12381.sol";
 import {KeyTags} from "../src/libraries/utils/KeyTags.sol";
-import {BN254G2} from "../test/helpers/BN254G2.sol";
+// import {BN254G2} from "../test/helpers/BN254G2.sol";
+import {BN254G2} from "./utils/BN254G2.sol";
+import {BLS12381G2} from "./utils/BLS12381G2.sol";
 import {KEY_TYPE_BLS_BN254, KEY_TYPE_BLS_BLS12381} from "../src/interfaces/modules/key-registry/IKeyRegistry.sol";
 
 /**
@@ -44,10 +47,11 @@ import {KEY_TYPE_BLS_BN254, KEY_TYPE_BLS_BLS12381} from "../src/interfaces/modul
  */
 abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
     using KeyTags for uint8;
-    using KeyBlsBn254 for BN254.G1Point;
     using BN254 for BN254.G1Point;
+    using BLS12381 for BLS12381.G1Point;
     using KeyBlsBn254 for KeyBlsBn254.KEY_BLS_BN254;
     using KeyBlsBls12381 for KeyBlsBls12381.KEY_BLS_BLS12381;
+
     using SymbioticSubnetwork for address;
 
     uint256 public constant NUM_OPERATORS = 4;
@@ -417,45 +421,103 @@ abstract contract RelayDeploy is SymbioticCoreInit, Config, CreateXWrapper {
         return staker;
     }
 
-    function _registerBlsBn254Key(Vm.Wallet memory operator, address keyRegistry) internal {
-        // Generate key components (no prank needed - this is just math)
-        BN254.G1Point memory keyG1 = BN254.generatorG1().scalar_mul(operator.privateKey);
-        BN254.G2Point memory keyG2 = _getG2Key(operator.privateKey);
-        bytes memory keyBytes = KeyBlsBn254.wrap(keyG1).toBytes();
-
-        bytes32 structHash = keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)));
-        bytes32 digest = MyKeyRegistry(keyRegistry).hashTypedDataV4(structHash);
-        BN254.G1Point memory messageG1 = BN254.hashToG1(digest);
-        BN254.G1Point memory signature = messageG1.scalar_mul(operator.privateKey);
-
-        uint8 keyTag = KEY_TYPE_BLS_BN254.getKeyTag(15);
-
-        // Broadcast with the OPERATOR's private key (not network's!)
+    function _registerBlsBn254Key(
+        KeyRegistry keyRegistry,
+        Vm.Wallet memory operator,
+        uint256 privateKey,
+        uint8 keyTag
+    ) internal {
+        (BN254.G1Point memory g1Key, BN254.G2Point memory g2Key) = getBLSKeys(privateKey);
+        bytes memory keyBytes = KeyBlsBn254.wrap(g1Key).toBytes();
+        bytes32 messageHash = keyRegistry.hashTypedDataV4(
+            keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)))
+        );
+        BN254.G1Point memory messageG1 = BN254.hashToG1(messageHash);
+        BN254.G1Point memory sigG1 = messageG1.scalar_mul(privateKey);
+        // msg.sender must equal operator.addr for KeyRegistry's ownership check.
         vm.startBroadcast(operator.privateKey);
-        MyKeyRegistry(keyRegistry).setKey(keyTag, keyBytes, abi.encode(signature), abi.encode(keyG2));
+        keyRegistry.setKey(KEY_TYPE_BLS_BN254.getKeyTag(keyTag), keyBytes, abi.encode(sigG1), abi.encode(g2Key));
         vm.stopBroadcast();
     }
 
-    function _registerBls12381Key(Vm.Wallet memory operator, address keyRegistry) internal {
-        // Generate key components
-        // BLS12381.G1Point memory generator = BLS12381.negate(BLS12381.negGeneratorG1());
-        BLS12381.G1Point memory generator = BLS12381.generatorG1();
-        BLS12381.G1Point memory keyG1 = BLS12381.scalar_mul(generator, operator.privateKey);
-        BLS12381.G2Point memory keyG2 = _g2Mul(BLS12381.generatorG2(), bytes32(operator.privateKey));
-        bytes memory keyBytes = KeyBlsBls12381.wrap(keyG1).toBytes();
+    function getBLSKeys(uint256 privateKey) public returns (BN254.G1Point memory, BN254.G2Point memory) {
+        BN254.G1Point memory G1Key = BN254.generatorG1().scalar_mul(privateKey);
+        BN254.G2Point memory G2 = BN254.generatorG2();
+        (uint256 x1, uint256 x2, uint256 y1, uint256 y2) = BN254G2.ECTwistMul(
+            privateKey,
+            G2.X[1],
+            G2.X[0],
+            G2.Y[1],
+            G2.Y[0]
+        );
+        return (G1Key, BN254.G2Point([x2, x1], [y2, y1]));
+    }
 
-        bytes32 structHash = keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)));
-        bytes32 digest = MyKeyRegistry(keyRegistry).hashTypedDataV4(structHash);
-        BLS12381.G1Point memory messageG1 = BLS12381.hashToG1(abi.encodePacked(digest));
-        BLS12381.G1Point memory signature = BLS12381.scalar_mul(messageG1, operator.privateKey);
-
-        uint8 keyTag = KEY_TYPE_BLS_BLS12381.getKeyTag(0); // keyType: 2, keyID: 0
-
-        // Broadcast with the OPERATOR's private key
+    function _registerBls12381Key(
+        KeyRegistry keyRegistry,
+        Vm.Wallet memory operator,
+        uint256 privateKey,
+        uint8 keyTag
+    ) internal {
+        (BLS12381.G1Point memory g1Key, BLS12381.G2Point memory g2Key) = getBLS12381Keys(privateKey);
+        bytes memory keyBytes = KeyBlsBls12381.wrap(g1Key).toBytes();
+        bytes32 messageHash = keyRegistry.hashTypedDataV4(
+            keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)))
+        );
+        BLS12381.G1Point memory messageG1 = BLS12381.hashToG1(abi.encodePacked(messageHash));
+        BLS12381.G1Point memory sigG1 = messageG1.scalar_mul(privateKey);
+        // msg.sender must equal operator.addr for KeyRegistry's ownership check.
         vm.startBroadcast(operator.privateKey);
-        MyKeyRegistry(keyRegistry).setKey(keyTag, keyBytes, abi.encode(signature), abi.encode(keyG2));
+        keyRegistry.setKey(KEY_TYPE_BLS_BLS12381.getKeyTag(keyTag), keyBytes, abi.encode(sigG1), abi.encode(g2Key));
         vm.stopBroadcast();
     }
+
+    function getBLS12381Keys(
+        uint256 privateKey
+    ) public view returns (BLS12381.G1Point memory, BLS12381.G2Point memory) {
+        BLS12381.G1Point memory G1Key = BLS12381.generatorG1().scalar_mul(privateKey);
+        BLS12381.G2Point memory G2Key = BLS12381G2.scalarMul(privateKey, BLS12381.generatorG2());
+        return (G1Key, G2Key);
+    }
+
+    // function _registerBlsBn254Key(Vm.Wallet memory operator, address keyRegistry) internal {
+    //     // Generate key components (no prank needed - this is just math)
+    //     BN254.G1Point memory keyG1 = BN254.generatorG1().scalar_mul(operator.privateKey);
+    //     BN254.G2Point memory keyG2 = _getG2Key(operator.privateKey);
+    //     bytes memory keyBytes = KeyBlsBn254.wrap(keyG1).toBytes();
+
+    //     bytes32 structHash = keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)));
+    //     bytes32 digest = MyKeyRegistry(keyRegistry).hashTypedDataV4(structHash);
+    //     BN254.G1Point memory messageG1 = BN254.hashToG1(digest);
+    //     BN254.G1Point memory signature = messageG1.scalar_mul(operator.privateKey);
+
+    //     uint8 keyTag = KEY_TYPE_BLS_BN254.getKeyTag(15);
+
+    //     // Broadcast with the OPERATOR's private key (not network's!)
+    //     vm.startBroadcast(operator.privateKey);
+    //     MyKeyRegistry(keyRegistry).setKey(keyTag, keyBytes, abi.encode(signature), abi.encode(keyG2));
+    //     vm.stopBroadcast();
+    // }
+
+    // function _registerBls12381Key(Vm.Wallet memory operator, address keyRegistry) internal {
+    //     // Generate key components
+    //     BLS12381.G1Point memory generator = BLS12381.generatorG1();
+    //     BLS12381.G1Point memory keyG1 = BLS12381.scalar_mul(generator, operator.privateKey);
+    //     BLS12381.G2Point memory keyG2 = _g2Mul(BLS12381.generatorG2(), bytes32(operator.privateKey));
+    //     bytes memory keyBytes = KeyBlsBls12381.wrap(keyG1).toBytes();
+
+    //     bytes32 structHash = keccak256(abi.encode(KEY_OWNERSHIP_TYPEHASH, operator.addr, keccak256(keyBytes)));
+    //     bytes32 digest = MyKeyRegistry(keyRegistry).hashTypedDataV4(structHash);
+    //     BLS12381.G1Point memory messageG1 = BLS12381.hashToG1(abi.encodePacked(digest));
+    //     BLS12381.G1Point memory signature = BLS12381.scalar_mul(messageG1, operator.privateKey);
+
+    //     uint8 keyTag = KEY_TYPE_BLS_BLS12381.getKeyTag(0); // keyType: 2, keyID: 0
+
+    //     // Broadcast with the OPERATOR's private key
+    //     vm.startBroadcast(operator.privateKey);
+    //     MyKeyRegistry(keyRegistry).setKey(keyTag, keyBytes, abi.encode(signature), abi.encode(keyG2));
+    //     vm.stopBroadcast();
+    // }
 
     function _getG2Key(uint256 privateKey) internal view returns (BN254.G2Point memory) {
         BN254.G2Point memory G2 = BN254.generatorG2();
