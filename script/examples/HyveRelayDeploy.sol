@@ -48,10 +48,9 @@ contract HyveRelayDeploy is RelayDeploy {
     // ValSet driver
     string public constant VALSET_DRIVER_NAME = "MyValSetDriver";
     string public constant VALSET_DRIVER_VERSION = "1";
-    uint48 public constant EPOCH_DURATION = 60;
+    uint48 public constant EPOCH_DURATION = 300;
     // Supersum uses a separate shorter value (default 10s) → 6 committer slots per epoch.
-    // Using EPOCH_DURATION (same as old MyRelayDeploy) gives only 1 slot/epoch which reduces liveness.
-    uint48 public constant COMMITTER_SLOT_DURATION = 10;
+    uint48 public constant COMMITTER_SLOT_DURATION = 30;
     uint208 public constant NUM_AGGREGATORS = 4;
     uint208 public constant NUM_COMMITTERS = 4;
     uint208 public constant MAX_VALIDATORS_COUNT = 1000;
