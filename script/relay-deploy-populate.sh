@@ -108,3 +108,5 @@ forge script "$script_path" \
   --rpc-url "$rpc_url" \
   "${extra_args[@]}"
 
+cast rpc evm_increaseTime 15 --rpc-url "$rpc_url"
+cast rpc evm_mine --rpc-url "$rpc_url"
